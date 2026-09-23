@@ -1,7 +1,6 @@
 import mongoose from 'mongoose';
 
-const DEFAULT_MONGODB_URI = 'mongodb+srv://shopnexus:OY0pd4jFeL8Iojlw@sadasaad.pszei0q.mongodb.net/shopnexus?retryWrites=true&w=majority&appName=SadaSaad';
-const MONGODB_URI = process.env.MONGODB_URI || process.env.MONGO_URI || DEFAULT_MONGODB_URI;
+const MONGODB_URI = process.env.MONGODB_URI || process.env.MONGO_URI || '';
 
 interface MongooseCache {
   conn: typeof mongoose | null;

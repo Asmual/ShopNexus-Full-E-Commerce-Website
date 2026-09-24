@@ -261,125 +261,84 @@ Respond ONLY with a valid JSON object matching this schema without markdown code
   ]
 }`;
 
-      // ⚡ Fast Vision Execution: Try up to 2 fast attempts across rotating keys & fast models (Strictly capped to guarantee ~1-2s response)
-      const primaryModels = ['gemini-3.5-flash-lite', 'gemini-3.5-flash'];
-      let attempts = 0;
-      const maxAttempts = 2;
+      const visionModels = [
+        'gemini-3.6-flash',
+        'gemini-3.7-flash',
+        'gemini-flash-latest',
+      ];
 
-      for (let i = 0; i < apiKeys.length && !aiMatchResult && attempts < maxAttempts; i++) {
-        const apiKey = apiKeys[i];
-        const model = primaryModels[attempts % primaryModels.length];
-        attempts++;
-        try {
-          const geminiRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                contents: [
-                  {
-                    role: 'user',
-                    parts: [
-                      {
-                        inlineData: {
-                          mimeType: mimeType,
-                          data: cleanBase64,
+      for (const apiKey of apiKeys) {
+        if (aiMatchResult) break;
+
+        for (const model of visionModels) {
+          if (aiMatchResult) break;
+          try {
+            const geminiRes = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [
+                    {
+                      role: 'user',
+                      parts: [
+                        {
+                          inlineData: {
+                            mimeType: mimeType,
+                            data: cleanBase64,
+                          },
                         },
-                      },
-                      {
-                        text: visionPrompt,
-                      },
-                    ],
+                        {
+                          text: visionPrompt,
+                        },
+                      ],
+                    },
+                  ],
+                  generationConfig: {
+                    temperature: 0.1,
+                    maxOutputTokens: 512,
+                    thinkingConfig: {
+                      thinkingBudget: 0,
+                    },
+                    responseMimeType: 'application/json',
                   },
-                ],
-                generationConfig: {
-                  temperature: 0.1,
-                  maxOutputTokens: 512,
-                  thinkingConfig: {
-                    thinkingBudget: 0,
-                  },
-                  responseMimeType: 'application/json',
-                },
-              }),
-              signal: AbortSignal.timeout(2500),
-            }
-          );
-
-          if (geminiRes.ok) {
-            const geminiJson = await geminiRes.json();
-            const textResponse = geminiJson?.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (textResponse) {
-              try {
-                const cleaned = textResponse.replace(/```json|```/g, '').trim();
-                const parsed = JSON.parse(cleaned);
-                if (parsed.detectedItem) {
-                  aiMatchResult = parsed;
-                  break;
-                }
-              } catch {
-                console.warn('JSON parse error from vision model:', textResponse);
+                }),
+                signal: AbortSignal.timeout(4500),
               }
+            );
+
+            if (geminiRes.ok) {
+              const geminiJson = await geminiRes.json();
+              const textResponse = geminiJson?.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (textResponse) {
+                try {
+                  const cleaned = textResponse.replace(/```json|```/g, '').trim();
+                  const parsed = JSON.parse(cleaned);
+                  if (parsed && (parsed.detectedItem || typeof parsed.isGadget === 'boolean')) {
+                    aiMatchResult = parsed;
+                    break;
+                  }
+                } catch {
+                  console.warn('JSON parse error from vision model:', textResponse);
+                }
+              }
+            } else {
+              console.warn(`Vision model (${model}) status ${geminiRes.status}, trying next key/model...`);
             }
-          } else {
-            console.warn(`Vision model (${model}) status ${geminiRes.status}, trying next key...`);
+          } catch (modelErr) {
+            console.warn(`Vision model attempt (${model}) error:`, modelErr);
           }
-        } catch (modelErr) {
-          console.warn(`Vision model attempt (${model}) error:`, modelErr);
         }
       }
     }
 
     // 🎯 4. Build Final Matched Products List & Category Inference
-    let detectedItemTitle = aiMatchResult?.detectedItem || '';
-    let queryVisualTags: string[] = aiMatchResult?.visualTags || [];
-    const categoryType = aiMatchResult?.categoryType || 'tech_gadget';
+    const categoryType = aiMatchResult?.categoryType || 'non_tech_object';
     let isGadget = aiMatchResult?.isGadget ?? (categoryType === 'tech_gadget');
-    let detectedCategory = aiMatchResult?.detectedCategory || '';
-
-    // 🧠 Intelligent Zero-Token Local Classifier (Instant Sub-50ms fallback when all Gemini keys are offline/rate-limited)
-    if (!aiMatchResult) {
-      const lowerImg = (imageUrl || '').toLowerCase();
-      let fallbackType = 'headphones';
-      if (lowerImg.includes('keyboard') || lowerImg.includes('1587829741301')) {
-        fallbackType = 'keyboard';
-      } else if (lowerImg.includes('mouse') || lowerImg.includes('1615663245857') || lowerImg.includes('gaming')) {
-        fallbackType = 'mouse';
-      } else if (lowerImg.includes('watch') || lowerImg.includes('apple-watch') || lowerImg.includes('smartwatch')) {
-        fallbackType = 'watch';
-      } else if (lowerImg.includes('mic') || lowerImg.includes('lavalier') || lowerImg.includes('podcast')) {
-        fallbackType = 'microphone';
-      } else {
-        fallbackType = 'headphones';
-      }
-
-      if (fallbackType === 'headphones') {
-        detectedItemTitle = isBn ? 'সনি / বোস নয়েজ-ক্যানসেলিং হেডফোন' : 'Sony / Bose ANC Wireless Headphones';
-        detectedCategory = 'Audio';
-        queryVisualTags = isBn ? ['হেডফোন', 'ব্লুটুথ-অডিও', 'নয়েজ-ক্যানসেলিং'] : ['headphones', 'anc-wireless', 'audiophile'];
-        isGadget = true;
-      } else if (fallbackType === 'keyboard') {
-        detectedItemTitle = isBn ? 'কাস্টম মেকানিক্যাল কীবোর্ড' : 'Custom Mechanical Keyboard';
-        detectedCategory = 'Peripherals';
-        queryVisualTags = isBn ? ['মেকানিক্যাল-কীবোর্ড', 'কাস্টম-কিওয়্যার', 'ওয়্যারলেস'] : ['mechanical-keyboard', 'custom-keycaps', 'wireless'];
-        isGadget = true;
-      } else if (fallbackType === 'mouse') {
-        detectedItemTitle = isBn ? 'গেমিং ও প্রোডাক্টিভিটি মাউস' : 'Wireless Gaming & Productivity Mouse';
-        detectedCategory = 'Peripherals';
-        queryVisualTags = isBn ? ['মাউস', 'প্রিসিশন-ট্র্যাকিং', 'গেমিং-গিয়ার'] : ['wireless-mouse', 'precision-sensor', 'gaming'];
-        isGadget = true;
-      } else if (fallbackType === 'watch') {
-        detectedItemTitle = isBn ? 'স্মার্টওয়াচ ও হেলথ ট্র্যাকার' : 'Smartwatch & Fitness Tracker';
-        detectedCategory = 'Wearables';
-        queryVisualTags = isBn ? ['স্মার্টওয়াচ', 'অ্যামোলেড-ডিসপ্লে', 'ফিটনেস'] : ['smartwatch', 'amoled-display', 'fitness'];
-        isGadget = true;
-      } else if (fallbackType === 'microphone') {
-        detectedItemTitle = isBn ? 'ওয়্যারলেস স্টুডিও মাইক্রোফোন' : 'Studio Wireless Microphone';
-        detectedCategory = 'Audio';
-        queryVisualTags = isBn ? ['মাইক্রোফোন', 'স্টুডিও-রেকর্ড', 'ভয়েস'] : ['microphone', 'studio-audio', 'podcast'];
-        isGadget = true;
-      }
-    }
+    let detectedItemTitle = aiMatchResult?.detectedItem || (isBn ? 'শনাক্তকৃত বস্তু' : 'Detected Subject');
+    let queryVisualTags: string[] = aiMatchResult?.visualTags || (isBn ? ['ভিজ্যুয়াল-সার্চ'] : ['visual-search']);
+    let detectedCategory = aiMatchResult?.detectedCategory || (isGadget ? 'Electronics' : 'General');
 
     const finalMatchedItems: VisualMatchedItem[] = [];
 
@@ -598,14 +557,18 @@ Respond ONLY with a valid JSON object matching this schema without markdown code
 
     let aiMessage = aiMatchResult?.aiMessage || '';
     if (!aiMessage) {
-      if (finalMatchedItems.length > 0) {
+      if (!isGadget) {
+        aiMessage = isBn
+          ? 'এটি কোনো টেক গ্যাজেট বা ইলেকট্রনিক্স পণ্য নয়। ShopNexus শুধুমাত্র প্রিমিয়াম টেক গ্যাজেট, কম্পিউটার পেরিফেরালস ও অডিও অ্যাকসেসরিজ সরবরাহ করে।'
+          : 'This item is not a tech gadget or consumer electronics. ShopNexus exclusively offers premium tech gear, computing, and audio peripherals.';
+      } else if (finalMatchedItems.length > 0) {
         aiMessage = isBn
           ? `আপনার ছবির সাথে আমাদের ক্যাটালগে থাকা "${finalMatchedItems[0].product.title}" গ্যাজেটটি সফলভাবে শনাক্ত ও মিল করা হয়েছে।`
           : `We identified your uploaded image and directly matched it with "${finalMatchedItems[0].product.title}" from our catalog.`;
       } else {
         aiMessage = isBn
-          ? `আমরা আপনার গ্যাজেটটি শনাক্ত করেছি। নিচে ক্যাটালগের সেরা গ্যাজেটগুলো প্রদর্শিত হলো।`
-          : `We identified your tech gadget. Below are the best related in-stock gadgets.`;
+          ? `আমরা আপনার গ্যাজেটটি শনাক্ত করেছি। নিচে ক্যাটালগের সেরা বিকল্প গ্যাজেটগুলো দেখতে পারেন।`
+          : `We identified your tech gadget. Below are the best related in-stock alternatives.`;
       }
     }
 

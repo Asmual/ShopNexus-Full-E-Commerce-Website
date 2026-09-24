@@ -39,7 +39,7 @@ interface VisualMatchedItem {
   matchedFeatures: string[];
 }
 
-// In-Memory Visual Search Cache (0 Token Cost for repeated image searches in demos/viva)
+// In-Memory Visual Search Cache (Instant 0 Token replay for demo/viva)
 interface CachedVisualResponse {
   data: Record<string, unknown>;
   timestamp: number;
@@ -94,7 +94,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 🗄️ 2. Fetch live products from MongoDB Atlas (with fallback to cached or ALL_PRODUCTS)
+    // 🗄️ 2. Fetch live products from MongoDB Atlas (with fallback to ALL_PRODUCTS)
     let catalogProducts: VisualCatalogItem[] = [];
     if (cachedCatalogProducts.length > 0 && Date.now() - lastCatalogFetch < CATALOG_TTL) {
       catalogProducts = [...cachedCatalogProducts];
@@ -114,7 +114,7 @@ export async function POST(req: NextRequest) {
           }
         }
       } catch {
-        // Fallback to in-memory datasets
+        // Fallback to static dataset
       }
 
       // Merge static catalog products (Strict Deduplication by ID and Normalized Title)
@@ -136,21 +136,22 @@ export async function POST(req: NextRequest) {
     }
 
     // Create concise catalog reference for AI prompt
-    const catalogSummary = catalogProducts.slice(0, 30).map((p) => ({
+    const catalogSummary = catalogProducts.slice(0, 35).map((p) => ({
       id: p._id,
       title: p.title || '',
       category: p.category,
       brand: p.brand,
       price: p.discountPrice || p.price,
       tags: p.tags || [],
-      description: (p.description || '').slice(0, 150),
     }));
 
     let aiMatchResult: {
-      categoryType: 'human_or_selfie' | 'tech_gadget' | 'non_tech_object' | 'screenshot_or_ui';
-      detectedCategory?: string;
+      isProduct: boolean;
       detectedItem: string;
-      isGadget: boolean;
+      detectedCategory: string;
+      brand?: string;
+      color?: string;
+      keywords: string[];
       isCatalogAvailable: boolean;
       aiMessage: string;
       visualTags: string[];
@@ -183,77 +184,58 @@ export async function POST(req: NextRequest) {
       const targetLanguageInstruction = isBn
         ? `CRITICAL LANGUAGE DIRECTIVE:
 The current user interface language is BENGALI (বাংলা).
-1. "detectedItem": MUST be written in natural, accurate Bengali (e.g. "কিউ০৭ ব্লুটুথ সেলফি স্টিক ও ট্রাইপড", "ওয়্যারলেস মাইক্রোফোন", "অ্যাপল আইফোন ও ম্যাগসেফ কেস", "মেকানিক্যাল কীবোর্ড", "স্মার্টওয়াচ", "নয়েজ-ক্যানসেলিং হেডফোন").
-2. "aiMessage": MUST be STRICTLY 100% PURE BENGALI (বাংলা). Under NO circumstances should you output English sentences, mixed text, or slash translations like "/ Hello...". Output only clean Bengali sentences.
-3. "visualTags": MUST be in Bengali (e.g. ["সেলফি-স্টিক", "ট্রাইপড", "মোবাইল-অ্যাকসেসরি"] or ["মাইক্রোফোন", "অডিও-রেকর্ড", "ভয়েস"]).`
+1. "detectedItem": MUST be written in natural, accurate Bengali (e.g. "স্মার্টওয়াচ / ঘড়ি", "মেকানিক্যাল কীবোর্ড", "ওয়্যারলেস হেডফোন", "টি-শার্ট", "লেদার ওয়ালেট", "সেলফি স্টিক ও ট্রাইপড", "মানুষের সেলফি / প্রতিকৃতি", "প্রাকৃতিক দৃশ্য").
+2. "aiMessage": MUST be STRICTLY 100% NATURAL BENGALI (বাংলা).
+3. "visualTags": MUST be in Bengali (e.g. ["স্মার্টওয়াচ", "ফিটনেস-ট্র্যাকার", "রিস্ট-ব্যান্ড"]).`
         : `CRITICAL LANGUAGE DIRECTIVE:
 The current user interface language is ENGLISH.
-1. "detectedItem": MUST be written in crisp, professional English (e.g. "Q07 Bluetooth Selfie Stick & Tripod", "Wireless Lavalier Microphone", "Apple iPhone with MagSafe Case", "Mechanical Keyboard", "Smartwatch").
-2. "aiMessage": MUST be STRICTLY 100% PURE ENGLISH. DO NOT include any Bengali words or slash translations.
-3. "visualTags": MUST be in English (e.g. ["selfie-stick", "tripod", "creator-gear"] or ["microphone", "wireless-audio"]).`;
+1. "detectedItem": MUST be written in crisp, natural English (e.g. "Apple Watch Ultra / Smartwatch", "Mechanical Keyboard", "Wireless Headphones", "Cotton T-Shirt", "Leather Wallet", "Human Portrait / Selfie", "Nature Scenery").
+2. "aiMessage": MUST be STRICTLY 100% PURE ENGLISH.
+3. "visualTags": MUST be in English (e.g. ["smartwatch", "wearables", "fitness-tracker"]).`;
 
-      const visionPrompt = `You are ShopNexus AI Vector Vision Engine - a specialist in multimodal computer vision for tech gadgets, electronics, mechanical keyboards, audiophile headphones, smartwatches, gaming peripherals, smartphones, and accessories.
+      const visionPrompt = `You are ShopNexus AI Vector Vision Engine - a high-accuracy multimodal visual recognition system for an e-commerce platform.
 
 ${targetLanguageInstruction}
 
-CRITICAL OCR & PRODUCT BOX DIRECTIVE:
-If a person is holding a product box, retail packaging, or electronic device in front of the camera (e.g. "Wireless Microphone", "F11-2", "Lavalier Microphone", "Transmitter/Receiver", "Earbuds", "Mechanical Keyboard"):
-1. ALWAYS prioritize and focus on the gadget/box being presented in the foreground, completely ignoring the human background!
-2. Read all visible text printed on the box/device (e.g. "F11-2", "Wireless Microphone", "无线收音麦克风", "Lavalier", "Gaming Mouse", etc.).
-3. If the box/device mentions or depicts a microphone, wireless mic, or audio gear:
-   - "detectedCategory" MUST be "Audio"
-   - "detectedItem" MUST be "ওয়্যারলেস মাইক্রোফোন" (or specific model in Bengali) when language is Bengali, or "Wireless Lavalier Microphone" when language is English.
-   - "visualTags" MUST include ["মাইক্রোফোন", "ওয়্যারলেস-অডিও", "ল্যাভালিয়ার"] (or English equivalents).
-   - "categoryType" MUST be "tech_gadget" and "isGadget": true.
+ANALYSIS GUIDELINES:
+1. Determine whether the image contains a COMMERCIAL PRODUCT / PURCHASABLE ITEM (e.g. watches, smartwatches, headphones, microphones, keyboards, mice, electronics, fashion apparel, shoes, bags, accessories, home items, gadgets, etc.):
+   - If a person is wearing or holding a product (e.g., wrist watch, wearing headphones, holding a microphone or phone):
+     -> Focus strictly on the PRODUCT in foreground! Set "isProduct": true.
+   - If the image is PURELY a human face/selfie, portrait, pet/animal, nature landscape, building, document, or abstract background with NO distinct product:
+     -> Set "isProduct": false.
+     -> "detectedItem": Clear description in requested language (e.g. "মানুষের প্রতিকৃতি / সেলফি" or "Human Portrait / Selfie", "প্রাকৃতিক দৃশ্য" or "Nature Scenery").
+     -> "aiMessage": In requested language, politely state what was detected, that it is not a commercial product, and invite them to explore store products below.
+     -> "matchedProductIds": []
 
-Analyze the uploaded image with high precision across 3 possible cases:
+2. If "isProduct" is true:
+   - Identify the exact product name/type ("detectedItem"), category ("detectedCategory"), brand if visible, and key search keywords in "keywords" (both English and Bengali terms, e.g. ["watch", "স্মার্টওয়াচ", "ultra", "apple"]).
+   - Inspect the STORE CATALOG below.
+   - If a direct match or strong similarity exists in the catalog:
+     -> Set "isCatalogAvailable": true
+     -> Add matched product ID(s) to "matchedProductIds" with similarityScore (0.80 to 0.98) and matchedFeatures.
+     -> "aiMessage": Confirm the match clearly in requested language.
+   - If the product is a REAL PRODUCT but NOT in our direct catalog (e.g. a specific drone, camera, vintage watch, or fashion item not in list):
+     -> Set "isCatalogAvailable": false
+     -> "matchedProductIds": []
+     -> "aiMessage": In requested language, politely explain that "[detectedItem]" was recognized, but is currently out of stock / not in catalog, and that we will add it soon while presenting related alternatives below.
 
-Case A: The image shows a HUMAN, SELFIE, FACE, PORTRAIT, PET, SCENERY, RANDOM NON-TECH OBJECT (food, clothes, furniture), or CODE/SCREENSHOT without any tech gadget box held in hand.
-- categoryType: "human_or_selfie" | "non_tech_object" | "screenshot_or_ui"
-- isGadget: false
-- isCatalogAvailable: false
-- detectedCategory: "General"
-- detectedItem: Clear description of the subject in the required language.
-- aiMessage: Polite single-language explanation that ShopNexus is a premium tech gadget store and this is not a tech gadget.
-- visualTags: Relevant single-language tags.
-- matchedProductIds: []
-
-Case B: The image shows a TECH GADGET / ELECTRONICS PRODUCT that MATCHES or IS VERY SIMILAR TO an item in the ShopNexus Catalog below (e.g. Mechanical Keyboard, Sony/Bose Headphones, Apple AirPods Max, Smartwatch, Gaming Mouse, Studio Mic, Smart Glasses).
-- categoryType: "tech_gadget"
-- isGadget: true
-- isCatalogAvailable: true
-- detectedCategory: One of "Wearables" | "Audio" | "Peripherals" | "Gaming" | "Creator Gear" | "Smart Home" | "Electronics"
-- detectedItem: Specific gadget name with brand/model if visible in the required language.
-- aiMessage: Positive single-language match explanation.
-- visualTags: 3 to 5 relevant technical tags in the required language.
-- matchedProductIds: Top 1-3 matching catalog IDs with similarityScore (0.85 to 0.99), confidence ("high" | "exact"), and matchedFeatures.
-
-Case C: The image shows a REAL TECH GADGET / DEVICE that is NOT DIRECTLY STOCKED in the ShopNexus Catalog (e.g. Wireless Lavalier Microphone / F11-2, Selfie Stick / Tripod, Smartphone / iPhone with MagSafe Case, Drone, DSLR Camera, Tablet, VR Headset, Power Bank).
-- categoryType: "tech_gadget"
-- isGadget: true
-- isCatalogAvailable: false
-- detectedCategory: Closest related category ("Audio" for all microphones/recorders, "Creator Gear" for tripods/lights, "Peripherals", "Wearables", "Gaming", "Smart Home", or "Electronics")
-- detectedItem: Specific name of the gadget / device in the required language (e.g. "ওয়্যারলেস মাইক্রোফোন" / "Wireless Lavalier Microphone", "Q07 Bluetooth Selfie Stick & Tripod").
-- aiMessage: Notice in the required language explaining that this specific gadget model was recognized, but is currently not in direct inventory, with best alternative tech recommendations provided below.
-- visualTags: 3 to 5 descriptive tags in the required language.
-- matchedProductIds: []
-
-SHOPNEXUS CATALOG:
+STORE CATALOG:
 ${JSON.stringify(catalogSummary, null, 2)}
 
-OUTPUT REQUIREMENT:
-Respond ONLY with a valid JSON object matching this schema without markdown codeblocks or extra text:
+OUTPUT SCHEMA (Respond ONLY with valid JSON, no markdown blocks):
 {
-  "categoryType": "human_or_selfie" | "tech_gadget" | "non_tech_object" | "screenshot_or_ui",
-  "detectedCategory": "Wearables" | "Audio" | "Peripherals" | "Gaming" | "Creator Gear" | "Smart Home" | "Electronics",
-  "detectedItem": "Accurate name of the detected gadget or subject",
-  "isGadget": true/false,
-  "isCatalogAvailable": true/false,
-  "aiMessage": "Informative message strictly in requested language",
+  "isProduct": true,
+  "detectedItem": "Name of the detected product or subject",
+  "detectedCategory": "Category name (e.g. Wearables, Audio, Peripherals, Fashion, Electronics, General)",
+  "brand": "Brand if known or empty",
+  "color": "Color if identifiable",
+  "keywords": ["keyword1", "keyword2", "keyword3"],
+  "isCatalogAvailable": true,
+  "aiMessage": "Pure natural message in requested language",
   "visualTags": ["tag1", "tag2", "tag3"],
   "matchedProductIds": [
     {
-      "id": "catalog_product_id",
+      "id": "product_id_from_catalog",
       "similarityScore": 0.95,
       "confidence": "high",
       "matchedFeatures": ["Feature 1", "Feature 2"]
@@ -262,211 +244,164 @@ Respond ONLY with a valid JSON object matching this schema without markdown code
 }`;
 
       const visionModels = [
-        'gemini-3.6-flash',
-        'gemini-3.7-flash',
-        'gemini-flash-latest',
+        'gemini-2.5-flash',
+        'gemini-flash-lite-latest',
+        'gemini-2.0-flash',
+        'gemini-1.5-flash',
       ];
 
       for (const apiKey of apiKeys) {
         if (aiMatchResult) break;
 
         for (const model of visionModels) {
-          if (aiMatchResult) break;
           try {
-            const geminiRes = await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-              {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  contents: [
-                    {
-                      role: 'user',
-                      parts: [
-                        {
-                          inlineData: {
-                            mimeType: mimeType,
-                            data: cleanBase64,
-                          },
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 4500);
+
+            const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+            const geminiRes = await fetch(geminiUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              signal: controller.signal,
+              body: JSON.stringify({
+                contents: [
+                  {
+                    parts: [
+                      { text: visionPrompt },
+                      {
+                        inline_data: {
+                          mime_type: mimeType,
+                          data: cleanBase64,
                         },
-                        {
-                          text: visionPrompt,
-                        },
-                      ],
-                    },
-                  ],
-                  generationConfig: {
-                    temperature: 0.1,
-                    maxOutputTokens: 512,
-                    thinkingConfig: {
-                      thinkingBudget: 0,
-                    },
-                    responseMimeType: 'application/json',
+                      },
+                    ],
                   },
-                }),
-                signal: AbortSignal.timeout(4500),
-              }
-            );
+                ],
+                generationConfig: {
+                  temperature: 0.1,
+                  maxOutputTokens: 500,
+                  responseMimeType: 'application/json',
+                },
+              }),
+            });
+
+            clearTimeout(timeoutId);
 
             if (geminiRes.ok) {
-              const geminiJson = await geminiRes.json();
-              const textResponse = geminiJson?.candidates?.[0]?.content?.parts?.[0]?.text;
-              if (textResponse) {
-                try {
-                  const cleaned = textResponse.replace(/```json|```/g, '').trim();
-                  const parsed = JSON.parse(cleaned);
-                  if (parsed && (parsed.detectedItem || typeof parsed.isGadget === 'boolean')) {
-                    aiMatchResult = parsed;
-                    break;
-                  }
-                } catch {
-                  console.warn('JSON parse error from vision model:', textResponse);
+              const geminiData = await geminiRes.json();
+              const rawText =
+                geminiData?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+
+              if (rawText) {
+                const cleanJson = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+                const parsed = JSON.parse(cleanJson);
+                if (parsed.detectedItem) {
+                  aiMatchResult = {
+                    isProduct: parsed.isProduct !== false,
+                    detectedItem: parsed.detectedItem,
+                    detectedCategory: parsed.detectedCategory || 'General',
+                    brand: parsed.brand || '',
+                    color: parsed.color || '',
+                    keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [],
+                    isCatalogAvailable: Boolean(parsed.isCatalogAvailable),
+                    aiMessage: parsed.aiMessage || '',
+                    visualTags: Array.isArray(parsed.visualTags) ? parsed.visualTags : [],
+                    matchedProductIds: Array.isArray(parsed.matchedProductIds)
+                      ? parsed.matchedProductIds
+                      : [],
+                  };
+                  break;
                 }
               }
-            } else {
-              console.warn(`Vision model (${model}) status ${geminiRes.status}, trying next key/model...`);
             }
-          } catch (modelErr) {
-            console.warn(`Vision model attempt (${model}) error:`, modelErr);
+          } catch {
+            // Try next model or key in cascade
           }
         }
       }
     }
 
-    // 🎯 4. Build Final Matched Products List & Category Inference
-    const categoryType = aiMatchResult?.categoryType || 'non_tech_object';
-    let isGadget = aiMatchResult?.isGadget ?? (categoryType === 'tech_gadget');
-    let detectedItemTitle = aiMatchResult?.detectedItem || (isBn ? 'শনাক্তকৃত বস্তু' : 'Detected Subject');
-    let queryVisualTags: string[] = aiMatchResult?.visualTags || (isBn ? ['ভিজ্যুয়াল-সার্চ'] : ['visual-search']);
-    let detectedCategory = aiMatchResult?.detectedCategory || (isGadget ? 'Electronics' : 'General');
+    // 🎯 4. Smart Dynamic Catalog Match & Ranking Engine
+    const isProduct = aiMatchResult ? aiMatchResult.isProduct : true;
+    const detectedItemTitle = aiMatchResult?.detectedItem || (isBn ? 'শনাক্তকৃত পণ্য' : 'Detected Product');
+    const detectedCategory = aiMatchResult?.detectedCategory || 'General';
+    const queryVisualTags = aiMatchResult?.visualTags || [];
+    const keywords = (aiMatchResult?.keywords || []).map((k: string) => k.toLowerCase().trim()).filter(Boolean);
+
+    // Add detectedItem tokens to keywords
+    detectedItemTitle.toLowerCase().split(/[\s,/-]+/).forEach((word: string) => {
+      if (word.length > 2 && !keywords.includes(word)) {
+        keywords.push(word);
+      }
+    });
 
     const finalMatchedItems: VisualMatchedItem[] = [];
+    const seenMatchedIds = new Set<string>();
 
-    // Smart Category & Subtype Inference
-    const lowerDetection = `${detectedItemTitle} ${queryVisualTags.join(' ')}`.toLowerCase();
-    const isMicrophone =
-      lowerDetection.includes('microphone') ||
-      lowerDetection.includes('মাইক্রোফোন') ||
-      lowerDetection.includes('মাইক') ||
-      lowerDetection.includes('mic') ||
-      lowerDetection.includes('lavalier') ||
-      lowerDetection.includes('podcast') ||
-      lowerDetection.includes('vocal') ||
-      lowerDetection.includes('f11') ||
-      lowerDetection.includes('k9') ||
-      lowerDetection.includes('k8') ||
-      lowerDetection.includes('wireless mic') ||
-      lowerDetection.includes('sound recording');
-
-    const isSelfieOrTripod =
-      (lowerDetection.includes('selfie') || lowerDetection.includes('tripod') || lowerDetection.includes('stick') || lowerDetection.includes('gimbal') || lowerDetection.includes('mount') || lowerDetection.includes('সেলফি') || lowerDetection.includes('ট্রাইপড')) &&
-      !isMicrophone;
-
-    const isHeadphonesOrSpeakers =
-      (lowerDetection.includes('headphone') || lowerDetection.includes('earphone') || lowerDetection.includes('earbud') || lowerDetection.includes('speaker') || lowerDetection.includes('headset') || lowerDetection.includes('airpod') || lowerDetection.includes('হেডফোন')) &&
-      !isMicrophone;
-
-    const isWatchOrWearable =
-      lowerDetection.includes('watch') || lowerDetection.includes('wearable') || lowerDetection.includes('fitness') || lowerDetection.includes('band') || lowerDetection.includes('tracker') || lowerDetection.includes('glasses') || lowerDetection.includes('স্মার্টওয়াচ');
-
-    const isKeyboardOrMouse =
-      lowerDetection.includes('keyboard') || lowerDetection.includes('mouse') || lowerDetection.includes('keycap') || lowerDetection.includes('desk') || lowerDetection.includes('peripheral') || lowerDetection.includes('কীবোর্ড') || lowerDetection.includes('মাউস');
-
-    const isCameraOrCreator =
-      (lowerDetection.includes('camera') || lowerDetection.includes('stream') || lowerDetection.includes('light') || lowerDetection.includes('lens') || lowerDetection.includes('dji') || isSelfieOrTripod) &&
-      !isMicrophone;
-
-    // Strict category resolution: Microphone MUST ALWAYS be 'Audio'
-    if (isMicrophone) {
-      detectedCategory = 'Audio';
-    } else if (isHeadphonesOrSpeakers) {
-      detectedCategory = 'Audio';
-    } else if (isSelfieOrTripod || isCameraOrCreator) {
-      detectedCategory = 'Creator Gear';
-    } else if (isWatchOrWearable) {
-      detectedCategory = 'Wearables';
-    } else if (isKeyboardOrMouse) {
-      detectedCategory = 'Peripherals';
-    } else if (lowerDetection.includes('game') || lowerDetection.includes('controller') || lowerDetection.includes('console') || lowerDetection.includes('joystick')) {
-      detectedCategory = 'Gaming';
-    } else if (lowerDetection.includes('home') || lowerDetection.includes('smart bulb') || lowerDetection.includes('vacuum') || lowerDetection.includes('router')) {
-      detectedCategory = 'Smart Home';
-    } else if (!detectedCategory || detectedCategory === 'General') {
-      detectedCategory = isGadget ? 'Audio' : 'General';
-    }
-
-    // Direct Match Validation (Must Strictly Match Product Type)
-    // IMPORTANT: Selfie Sticks and unstocked items must NEVER match Headphones!
-    if (aiMatchResult && isGadget && !isSelfieOrTripod && Array.isArray(aiMatchResult.matchedProductIds) && aiMatchResult.matchedProductIds.length > 0) {
-      let matchIdx = 0;
-      for (const match of aiMatchResult.matchedProductIds) {
-        const fullProd = catalogProducts.find(
-          (p) => p._id === match.id || p.id === match.id || p.slug === match.id
-        );
-        if (fullProd) {
-          const prodTitleLower = (fullProd.title || fullProd.name || '').toLowerCase();
-
-          // Strict type guard: A microphone query must only match genuine audio microphones, not headphones, smart home mugs, or mice!
-          const isProdAudio = (fullProd.category || '').toLowerCase() === 'audio';
-          const isProdMic = /\b(mic|mics|microphone|microphones|lavalier|podcast|sm7b|mv7|shure|condenser)\b/i.test(prodTitleLower);
-
-          if (isMicrophone && (!isProdAudio || !isProdMic)) {
-            continue;
+    if (isProduct) {
+      // Step A: Check AI-selected direct IDs
+      if (aiMatchResult && aiMatchResult.matchedProductIds.length > 0) {
+        for (const aiMatch of aiMatchResult.matchedProductIds) {
+          const fullProd = catalogProducts.find(
+            (p) => p._id === aiMatch.id || p.id === aiMatch.id || p.slug === aiMatch.id
+          );
+          if (fullProd && !seenMatchedIds.has(fullProd._id)) {
+            seenMatchedIds.add(fullProd._id);
+            finalMatchedItems.push({
+              product: {
+                _id: fullProd._id,
+                title: fullProd.title || fullProd.name || 'Product',
+                category: fullProd.category,
+                brand: fullProd.brand,
+                price: fullProd.price,
+                discountPrice: fullProd.discountPrice,
+                images: fullProd.images || (fullProd.image ? [fullProd.image] : []),
+                stock: fullProd.stock ?? 20,
+              },
+              similarityScore: Number(aiMatch.similarityScore) || 0.94,
+              matchLabel: isBn ? 'সর্বোচ্চ মিল' : 'Direct Match',
+              matchedFeatures: aiMatch.matchedFeatures?.length
+                ? aiMatch.matchedFeatures
+                : [fullProd.category || 'Product', fullProd.brand || 'Store Item'].filter(Boolean),
+            });
           }
-          // A headphone query must only match headphones, not microphones or speakers!
-          if (isHeadphonesOrSpeakers && (isProdMic || prodTitleLower.includes('microphone'))) {
-            continue;
-          }
-
-          const dynamicScore = match.similarityScore
-            ? Math.min(0.98, Math.max(0.85, match.similarityScore))
-            : Math.max(0.84, 0.96 - matchIdx * 0.05);
-
-          finalMatchedItems.push({
-            product: {
-              _id: fullProd._id,
-              title: fullProd.title || fullProd.name || 'Product',
-              category: fullProd.category,
-              brand: fullProd.brand,
-              price: fullProd.price,
-              discountPrice: fullProd.discountPrice,
-              images: fullProd.images || (fullProd.image ? [fullProd.image] : []),
-              stock: fullProd.stock ?? 20,
-            },
-            similarityScore: dynamicScore,
-            matchLabel: match.confidence === 'exact' ? (isBn ? 'নিখুঁত মিল' : 'Exact Visual Match') : (isBn ? 'শনাক্তকৃত মিল' : 'Detected Match'),
-            matchedFeatures: match.matchedFeatures || [fullProd.category || 'Tech Gadget'],
-          });
-          matchIdx++;
-          if (finalMatchedItems.length >= 3) break;
         }
       }
-    }
 
-    // Secondary Precise Keyword Matching (Requires Specific Product-Type Keyword, NEVER generic 'bluetooth' or 'wireless')
-    if (isGadget && !isSelfieOrTripod && finalMatchedItems.length === 0 && detectedItemTitle) {
-      const directCandidates = catalogProducts.filter((p) => {
-        const titleLower = (p.title || p.name || '').toLowerCase();
-        
-        if (isMicrophone) {
-          const isAudio = (p.category || '').toLowerCase() === 'audio';
-          const isMic = /\b(mic|mics|microphone|microphones|lavalier|podcast|sm7b|mv7|shure|condenser)\b/i.test(titleLower);
-          return isAudio && isMic;
-        }
-        if (isHeadphonesOrSpeakers) {
-          return (titleLower.includes('headphone') || titleLower.includes('wh-1000') || titleLower.includes('quietcomfort') || titleLower.includes('airpods') || titleLower.includes('momentum') || titleLower.includes('speaker') || titleLower.includes('stanmore')) && !titleLower.includes('mic');
-        }
-        if (isWatchOrWearable) {
-          return titleLower.includes('watch') || titleLower.includes('ultra') || titleLower.includes('fenix') || titleLower.includes('glasses');
-        }
-        if (isKeyboardOrMouse) {
-          return titleLower.includes('keyboard') || titleLower.includes('keychron') || titleLower.includes('mx master') || titleLower.includes('mouse');
-        }
-        return false;
-      });
+      // Step B: Multi-Keyword & Semantic Matching across Catalog
+      if (finalMatchedItems.length === 0 && keywords.length > 0) {
+        const scoredCandidates: Array<{ product: VisualCatalogItem; score: number }> = [];
 
-      if (directCandidates.length > 0) {
-        directCandidates.slice(0, 3).forEach((fullProd, idx) => {
+        for (const prod of catalogProducts) {
+          if (seenMatchedIds.has(prod._id)) continue;
+          const prodTitle = (prod.title || prod.name || '').toLowerCase();
+          const prodCat = (prod.category || '').toLowerCase();
+          const prodBrand = (prod.brand || '').toLowerCase();
+          const prodTags = (prod.tags || []).map((t) => t.toLowerCase());
+
+          let score = 0;
+          for (const kw of keywords) {
+            if (prodTitle.includes(kw)) score += 3;
+            if (prodCat.includes(kw)) score += 2;
+            if (prodBrand.includes(kw)) score += 2;
+            if (prodTags.some((t) => t.includes(kw))) score += 1.5;
+          }
+
+          if (detectedCategory && prodCat.includes(detectedCategory.toLowerCase())) {
+            score += 1;
+          }
+
+          if (score >= 2) {
+            scoredCandidates.push({ product: prod, score });
+          }
+        }
+
+        // Sort candidates by highest match score
+        scoredCandidates.sort((a, b) => b.score - a.score);
+
+        scoredCandidates.slice(0, 3).forEach((item, idx) => {
+          const fullProd = item.product;
+          seenMatchedIds.add(fullProd._id);
           finalMatchedItems.push({
             product: {
               _id: fullProd._id,
@@ -478,22 +413,19 @@ Respond ONLY with a valid JSON object matching this schema without markdown code
               images: fullProd.images || (fullProd.image ? [fullProd.image] : []),
               stock: fullProd.stock ?? 20,
             },
-            similarityScore: Math.max(0.82, 0.95 - idx * 0.06),
-            matchLabel: isBn ? 'শনাক্তকৃত মিল' : 'Detected Match',
-            matchedFeatures: [fullProd.category || 'Tech', fullProd.brand || 'Premium'].filter(Boolean),
+            similarityScore: Math.max(0.80, Math.min(0.96, 0.92 - idx * 0.05)),
+            matchLabel: idx === 0 ? (isBn ? 'সরাসরি মিল' : 'Best Match') : (isBn ? 'সম্পর্কিত মিল' : 'Related Match'),
+            matchedFeatures: [fullProd.category || 'Product', fullProd.brand || 'Featured'].filter(Boolean),
           });
         });
       }
     }
 
-    // 🌟 5. Build "You May Also Like" / "আপনারা দেখতে পারেন" Recommendations (when 1 or 2 items match)
+    // 🌟 5. Recommendations: "You May Also Like" / "আপনারা দেখতে পারেন"
     const recommendedItems: VisualMatchedItem[] = [];
-    if (isGadget && finalMatchedItems.length > 0 && finalMatchedItems.length < 3) {
-      const matchedIds = new Set(finalMatchedItems.map((item) => item.product._id));
+    if (isProduct && finalMatchedItems.length > 0 && finalMatchedItems.length < 3) {
       const remainingSlots = 3 - finalMatchedItems.length;
-
-      // Filter catalog items that are not in matchedItems
-      const unselectedCatalog = catalogProducts.filter((p) => !matchedIds.has(p._id));
+      const unselectedCatalog = catalogProducts.filter((p) => !seenMatchedIds.has(p._id));
       const sameCatUnselected = unselectedCatalog.filter(
         (p) => p.category?.toLowerCase() === detectedCategory.toLowerCase()
       );
@@ -519,25 +451,14 @@ Respond ONLY with a valid JSON object matching this schema without markdown code
       });
     }
 
-    // 💡 6. Fetch 2-4 Alternative Products if Gadget is Out of Stock or Not in Direct Catalog (0 matches)
+    // 💡 6. Alternative Products when Product is Out of Stock / Not in Catalog (0 matches)
     let alternativeItems: VisualMatchedItem[] = [];
-    if (isGadget && finalMatchedItems.length === 0) {
-      let categoryProds: VisualCatalogItem[] = [];
-
-      if (isMicrophone) {
-        // Strict audio / mic alternative filtering
-        categoryProds = catalogProducts.filter((p) => {
-          const cat = (p.category || '').toLowerCase();
-          const title = (p.title || p.name || '').toLowerCase();
-          return cat === 'audio' || title.includes('mic') || title.includes('headphone') || title.includes('audio');
-        });
-      } else {
-        categoryProds = catalogProducts.filter(
-          (p) => p.category?.toLowerCase() === detectedCategory.toLowerCase()
-        );
-      }
-      
+    if (isProduct && finalMatchedItems.length === 0) {
+      const categoryProds = catalogProducts.filter(
+        (p) => p.category?.toLowerCase() === detectedCategory.toLowerCase()
+      );
       const candidateList = categoryProds.length >= 2 ? categoryProds : catalogProducts;
+      
       alternativeItems = candidateList.slice(0, 4).map((p, idx) => ({
         product: {
           _id: p._id,
@@ -555,28 +476,52 @@ Respond ONLY with a valid JSON object matching this schema without markdown code
       }));
     }
 
+    // 🌟 7. Popular Store Products for Non-Product Images (selfies, landscapes, etc.)
+    if (!isProduct || (finalMatchedItems.length === 0 && recommendedItems.length === 0 && alternativeItems.length === 0)) {
+      const topPicks = catalogProducts.slice(0, 4);
+      topPicks.forEach((p) => {
+        recommendedItems.push({
+          product: {
+            _id: p._id,
+            title: p.title || p.name || 'Product',
+            category: p.category,
+            brand: p.brand,
+            price: p.price,
+            discountPrice: p.discountPrice,
+            images: p.images || (p.image ? [p.image] : []),
+            stock: p.stock ?? 20,
+          },
+          similarityScore: 0,
+          matchLabel: isBn ? 'জনপ্রিয় পছন্দ' : 'Popular Pick',
+          matchedFeatures: [p.category, p.brand].filter((item): item is string => Boolean(item)),
+        });
+      });
+    }
+
+    // Dynamic AI Message Formulation
     let aiMessage = aiMatchResult?.aiMessage || '';
     if (!aiMessage) {
-      if (!isGadget) {
+      if (!isProduct) {
         aiMessage = isBn
-          ? 'এটি কোনো টেক গ্যাজেট বা ইলেকট্রনিক্স পণ্য নয়। ShopNexus শুধুমাত্র প্রিমিয়াম টেক গ্যাজেট, কম্পিউটার পেরিফেরালস ও অডিও অ্যাকসেসরিজ সরবরাহ করে।'
-          : 'This item is not a tech gadget or consumer electronics. ShopNexus exclusively offers premium tech gear, computing, and audio peripherals.';
+          ? `শনাক্তকৃত বিষয়: "${detectedItemTitle}"। এটি বিক্রয়যোগ্য কোনো পণ্য নয়। অনুগ্রহ করে কোনো পণ্যের স্পষ্ট ছবি আপলোড করুন। নিচে আমাদের শপের ট্রেন্ডিং ও জনপ্রিয় পণ্যগুলো ঘুরে দেখতে পারেন:`
+          : `Detected Subject: "${detectedItemTitle}". This does not appear to be a commercial product. Please upload a clear photo of an item. In the meantime, explore our top store products below:`;
       } else if (finalMatchedItems.length > 0) {
         aiMessage = isBn
-          ? `আপনার ছবির সাথে আমাদের ক্যাটালগে থাকা "${finalMatchedItems[0].product.title}" গ্যাজেটটি সফলভাবে শনাক্ত ও মিল করা হয়েছে।`
+          ? `আপনার ছবির সাথে আমাদের ক্যাটালগে থাকা "${finalMatchedItems[0].product.title}" পণ্যটি সফলভাবে শনাক্ত ও মিল করা হয়েছে।`
           : `We identified your uploaded image and directly matched it with "${finalMatchedItems[0].product.title}" from our catalog.`;
       } else {
         aiMessage = isBn
-          ? `আমরা আপনার গ্যাজেটটি শনাক্ত করেছি। নিচে ক্যাটালগের সেরা বিকল্প গ্যাজেটগুলো দেখতে পারেন।`
-          : `We identified your tech gadget. Below are the best related in-stock alternatives.`;
+          ? `আমরা "${detectedItemTitle}" সফলভাবে শনাক্ত করেছি। দুঃখিত, এই পণ্যটি এই মুহূর্তে আমাদের স্টকে নেই, তবে আমরা শীঘ্রই এটি আমাদের ক্যাটালগে যুক্ত করব! নিচে আমাদের সম্পর্কিত ও বিকল্প পণ্যগুলো দেখতে পারেন:`
+          : `We identified "${detectedItemTitle}". While this exact item is currently out of stock, we are adding it soon! Check out related products below:`;
       }
     }
 
     const responsePayload = {
-      categoryType,
+      isProduct,
+      categoryType: isProduct ? 'product' : 'non_product',
       detectedCategory,
       detectedItem: detectedItemTitle,
-      isGadget,
+      isGadget: isProduct, // backwards compatibility
       isCatalogAvailable: finalMatchedItems.length > 0,
       aiMessage,
       queryVisualTags: queryVisualTags.length > 0 ? queryVisualTags : ['visual-search', 'ai-vision'],
@@ -585,7 +530,7 @@ Respond ONLY with a valid JSON object matching this schema without markdown code
       alternativeItems,
     };
 
-    // Cache the visual response ONLY if AI successfully analyzed the image
+    // Cache the visual response if AI processed it
     if (aiMatchResult) {
       visualSearchCache.set(cacheKey, {
         data: responsePayload,

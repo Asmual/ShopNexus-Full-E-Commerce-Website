@@ -535,36 +535,147 @@ const compressImageForVision = (source: File | string, maxDimension = 512, quali
                   </div>
                 ) : aiResponseData && !aiResponseData.isGadget ? (
                   /* 👤 CASE 1: Non-Gadget / Selfie / Human / Scenery Detected */
-                  <div className="p-3 sm:p-4 rounded-2xl bg-sky-500/10 dark:bg-sky-500/15 border border-sky-500/30 text-slate-900 dark:text-white space-y-2.5 shadow-xs">
-                    <div className="flex items-start gap-2.5">
-                      <div className="w-8 h-8 rounded-xl bg-sky-500/20 text-sky-600 dark:text-sky-400 flex items-center justify-center shrink-0">
-                        <AlertCircle className="w-4 h-4" />
+                  <div className="space-y-3">
+                    <div className="p-3 sm:p-4 rounded-2xl bg-sky-500/10 dark:bg-sky-500/15 border border-sky-500/30 text-slate-900 dark:text-white space-y-2.5 shadow-xs">
+                      <div className="flex items-start gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-sky-500/20 text-sky-600 dark:text-sky-400 flex items-center justify-center shrink-0">
+                          <AlertCircle className="w-4 h-4" />
+                        </div>
+                        <div className="space-y-0.5 min-w-0">
+                          <h4 className="text-[11px] sm:text-xs font-black uppercase tracking-wider text-sky-700 dark:text-sky-300">
+                            {isBn ? 'পণ্য বহির্ভূত ছবি শনাক্তকৃত' : 'NON-PRODUCT IMAGE DETECTED'}
+                          </h4>
+                          <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+                            {aiResponseData.aiMessage ||
+                              (isBn
+                                ? `শনাক্তকৃত বিষয়: "${detectedTitle}"। এটি কোনো ইলেকট্রনিক্স গ্যাজেট বা শপের পণ্য নয়। ShopNexus শুধুমাত্র প্রিমিয়াম মেকানিক্যাল কিবোর্ড, হেডফোন, স্মার্টওয়াচ ও অডিও গিয়ার বিক্রয় করে।`
+                                : `Detected: "${detectedTitle}". This is not an electronic gadget. ShopNexus exclusively sells premium tech gear, mechanical keyboards, headphones & smart accessories.`)}
+                          </p>
+                        </div>
                       </div>
-                      <div className="space-y-0.5 min-w-0">
-                        <h4 className="text-[11px] sm:text-xs font-black uppercase tracking-wider text-sky-700 dark:text-sky-300">
-                          {isBn ? 'নন-গ্যাজেট ছবি শনাক্তকৃত' : 'NON-GADGET IMAGE DETECTED'}
-                        </h4>
-                        <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
-                          {aiResponseData.aiMessage ||
-                            (isBn
-                              ? `শনাক্তকৃত বিষয়: "${detectedTitle}"। এটি কোনো ইলেকট্রনিক্স গ্যাজেট বা শপের পণ্য নয়। ShopNexus শুধুমাত্র প্রিমিয়াম মেকানিক্যাল কিবোর্ড, হেডফোন, স্মার্টওয়াচ ও অডিও গিয়ার বিক্রয় করে।`
-                              : `Detected: "${detectedTitle}". This is not an electronic gadget. ShopNexus exclusively sells premium tech gear, mechanical keyboards, headphones & smart accessories.`)}
-                        </p>
+
+                      <div className="flex items-center justify-between pt-2 border-t border-sky-500/20">
+                        <span className="text-[10px] sm:text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                          {isBn ? 'পণ্যের স্পষ্ট ছবি দিন:' : 'Try photographing a product:'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => startCamera('environment')}
+                          className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#ff4400] to-[#ff7700] text-white text-xs font-bold hover:scale-105 active:scale-95 transition-all cursor-pointer shadow-xs"
+                        >
+                          {isBn ? 'ক্যামেরা খুলুন' : 'Open Camera'}
+                        </button>
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between pt-2 border-t border-sky-500/20">
-                      <span className="text-[10px] sm:text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                        {isBn ? 'গ্যাজেটের ছবি দিয়ে খুঁজুন:' : 'Try photographing a gadget:'}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => startCamera('environment')}
-                        className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#ff4400] to-[#ff7700] text-white text-xs font-bold hover:scale-105 active:scale-95 transition-all cursor-pointer shadow-xs"
-                      >
-                        {isBn ? 'ক্যামেরা খুলুন' : 'Open Camera'}
-                      </button>
-                    </div>
+                    {/* Popular / Trending Products Recommendations */}
+                    {recommendedResults.length > 0 && (
+                      <div className="space-y-2.5 pt-1">
+                        <div className="flex items-center justify-between px-1">
+                          <h5 className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                            <Sparkles className="w-3.5 h-3.5 text-orange-500" />
+                            <span>
+                              {isBn ? 'আমাদের শপের জনপ্রিয় ও ট্রেন্ডিং পণ্যসমূহ:' : 'Popular & Trending Store Products:'}
+                            </span>
+                          </h5>
+                        </div>
+
+                        <div className="space-y-2">
+                          {recommendedResults.map((rec, idx) => {
+                            const prod = rec.product;
+                            const effectivePrice = prod.discountPrice || prod.price || 0;
+                            const originalPrice = prod.price ?? 0;
+                            return (
+                              <div
+                                key={idx}
+                                className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/80 hover:border-orange-500/50 flex items-center justify-between gap-3 transition-all shadow-xs group"
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <div className="relative w-12 h-12 rounded-xl overflow-hidden bg-white dark:bg-slate-950 shrink-0 border border-slate-200 dark:border-slate-800">
+                                    <Image
+                                      src={prod.images?.[0] || 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=200'}
+                                      alt={prod.title}
+                                      fill
+                                      className="object-cover group-hover:scale-105 transition-transform"
+                                      unoptimized
+                                    />
+                                  </div>
+
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-[9px] font-black px-2 py-0.5 rounded-md bg-orange-500/15 text-orange-600 dark:text-orange-400 border border-orange-500/20">
+                                        {isBn ? 'জনপ্রিয় পছন্দ' : 'Popular Pick'}
+                                      </span>
+                                      <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 truncate">
+                                        {prod.category}
+                                      </span>
+                                    </div>
+
+                                    <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate max-w-[200px] sm:max-w-[300px] mt-0.5">
+                                      {prod.title}
+                                    </h4>
+
+                                    <div className="flex items-center gap-2 mt-0.5">
+                                      <span className="text-xs font-black text-orange-600 dark:text-orange-400">
+                                        {isBn ? `৳${toBengaliNumber(effectivePrice.toLocaleString('en-US'))}` : `৳${effectivePrice.toLocaleString()}`}
+                                      </span>
+                                      {Boolean(prod.discountPrice && originalPrice > prod.discountPrice) && (
+                                        <span className="text-[10px] text-slate-400 line-through">
+                                          {isBn ? `৳${toBengaliNumber(originalPrice.toLocaleString('en-US'))}` : `৳${originalPrice.toLocaleString()}`}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      addItem({
+                                        productId: prod._id,
+                                        title: prod.title,
+                                        price: effectivePrice,
+                                        image: prod.images?.[0] || 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=200',
+                                        quantity: 1,
+                                        stock: prod.stock || 20,
+                                        vendorName: prod.vendorName || 'ShopNexus Official',
+                                      });
+                                      onClose();
+                                      openDrawer();
+                                    }}
+                                    className="p-2.5 rounded-xl bg-gradient-to-r from-[#ff4400] to-[#ff7700] hover:from-[#ff5500] hover:to-[#ff8800] text-white transition-all cursor-pointer shadow-md shadow-orange-500/25 hover:scale-105 active:scale-95"
+                                    title={isBn ? 'কার্টে যুক্ত করুন' : 'Add to Cart'}
+                                  >
+                                    <ShoppingBag className="w-4 h-4" />
+                                  </button>
+
+                                  <Link
+                                    href={`/products/${prod._id}`}
+                                    onClick={onClose}
+                                    className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer border border-slate-200 dark:border-slate-700"
+                                    title={isBn ? 'বিস্তারিত দেখুন' : 'View Details'}
+                                  >
+                                    <ArrowRight className="w-4 h-4" />
+                                  </Link>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        <div className="pt-2">
+                          <Link
+                            href="/products"
+                            onClick={onClose}
+                            className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-orange-500/10 via-amber-500/10 to-orange-500/10 hover:from-orange-500/20 hover:to-amber-500/20 border border-orange-500/30 text-orange-600 dark:text-orange-400 font-bold text-xs flex items-center justify-center gap-2 transition-all group shadow-sm hover:scale-[1.01]"
+                          >
+                            <span>{isBn ? 'আমাদের সমস্ত পণ্য দেখুন (Explore All Products)' : 'Explore All Store Products'}</span>
+                            <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+                          </Link>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : aiResponseData && aiResponseData.isGadget && (!aiResponseData.isCatalogAvailable || results.length === 0) ? (
                   /* ⚠️ CASE 2: Gadget Detected but Out of Stock / Not in Catalog -> Show In-Stock Alternatives */
@@ -577,7 +688,7 @@ const compressImageForVision = (source: File | string, maxDimension = 512, quali
                         </div>
                         <div className="space-y-0.5 min-w-0">
                           <h4 className="text-[11px] sm:text-xs font-black uppercase tracking-wider text-amber-700 dark:text-amber-300">
-                            {isBn ? 'গ্যাজেট শনাক্তকৃত (ওয়েবসাইটে পণ্যটি বর্তমানে নেই)' : 'GADGET DETECTED (CURRENTLY NOT IN STOCK)'}
+                            {isBn ? 'পণ্য শনাক্তকৃত (বর্তমানে স্টকে নেই)' : 'PRODUCT DETECTED (CURRENTLY NOT IN STOCK)'}
                           </h4>
                           <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
                             {aiResponseData.aiMessage ||

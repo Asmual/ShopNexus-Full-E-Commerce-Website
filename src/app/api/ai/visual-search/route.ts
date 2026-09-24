@@ -47,6 +47,10 @@ interface CachedVisualResponse {
 const visualSearchCache = new Map<string, CachedVisualResponse>();
 const VISUAL_CACHE_TTL = 30 * 60 * 1000; // 30 minutes TTL
 
+let cachedCatalogProducts: VisualCatalogItem[] = [];
+let lastCatalogFetch = 0;
+const CATALOG_TTL = 5 * 60 * 1000; // 5 mins in-memory catalog cache
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -64,7 +68,7 @@ export async function POST(req: NextRequest) {
     // 🌐 1. If imageUrl is provided and imageBase64 is not, fetch and convert to base64
     if (!imageBase64 && imageUrl) {
       try {
-        const imgRes = await fetch(imageUrl, { signal: AbortSignal.timeout(8000) });
+        const imgRes = await fetch(imageUrl, { signal: AbortSignal.timeout(4000) });
         if (imgRes.ok) {
           const arrayBuffer = await imgRes.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
@@ -90,38 +94,45 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 🗄️ 2. Fetch live products from MongoDB Atlas (with fallback to ALL_PRODUCTS)
+    // 🗄️ 2. Fetch live products from MongoDB Atlas (with fallback to cached or ALL_PRODUCTS)
     let catalogProducts: VisualCatalogItem[] = [];
-    try {
-      await connectToDatabase();
-      const db = mongoose.connection.db;
-      if (db) {
-        const dbItems = await db.collection('products').find({ isActive: { $ne: false } }).toArray();
-        if (dbItems && dbItems.length > 0) {
-          catalogProducts = dbItems
-            .filter((item) => item.title && !item.title.startsWith('sdfs') && !item.title.startsWith('ascasc'))
-            .map((item) => ({
-              ...item,
-              _id: item._id ? String(item._id) : (item.id || item.slug || 'prod-id'),
-            }));
+    if (cachedCatalogProducts.length > 0 && Date.now() - lastCatalogFetch < CATALOG_TTL) {
+      catalogProducts = [...cachedCatalogProducts];
+    } else {
+      try {
+        await connectToDatabase();
+        const db = mongoose.connection.db;
+        if (db) {
+          const dbItems = await db.collection('products').find({ isActive: { $ne: false } }).toArray();
+          if (dbItems && dbItems.length > 0) {
+            catalogProducts = dbItems
+              .filter((item) => item.title && !item.title.startsWith('sdfs') && !item.title.startsWith('ascasc'))
+              .map((item) => ({
+                ...item,
+                _id: item._id ? String(item._id) : (item.id || item.slug || 'prod-id'),
+              }));
+          }
+        }
+      } catch {
+        // Fallback to in-memory datasets
+      }
+
+      // Merge static catalog products (Strict Deduplication by ID and Normalized Title)
+      const existingIds = new Set(catalogProducts.map((p) => p._id));
+      const existingTitles = new Set(
+        catalogProducts.map((p) => (p.title || '').toLowerCase().trim())
+      );
+      for (const prod of ALL_PRODUCTS) {
+        const prodTitle = (prod.title || '').toLowerCase().trim();
+        if (!existingIds.has(prod._id) && !existingTitles.has(prodTitle)) {
+          catalogProducts.push(prod);
+          existingIds.add(prod._id);
+          existingTitles.add(prodTitle);
         }
       }
-    } catch {
-      // Fallback to in-memory datasets
-    }
 
-    // Merge static catalog products (Strict Deduplication by ID and Normalized Title)
-    const existingIds = new Set(catalogProducts.map((p) => p._id));
-    const existingTitles = new Set(
-      catalogProducts.map((p) => (p.title || '').toLowerCase().trim())
-    );
-    for (const prod of ALL_PRODUCTS) {
-      const prodTitle = (prod.title || '').toLowerCase().trim();
-      if (!existingIds.has(prod._id) && !existingTitles.has(prodTitle)) {
-        catalogProducts.push(prod);
-        existingIds.add(prod._id);
-        existingTitles.add(prodTitle);
-      }
+      cachedCatalogProducts = catalogProducts;
+      lastCatalogFetch = Date.now();
     }
 
     // Create concise catalog reference for AI prompt
@@ -288,10 +299,14 @@ Respond ONLY with a valid JSON object matching this schema without markdown code
                   ],
                   generationConfig: {
                     temperature: 0.1,
-                    maxOutputTokens: 1024,
+                    maxOutputTokens: 512,
+                    thinkingConfig: {
+                      thinkingBudget: 0,
+                    },
+                    responseMimeType: 'application/json',
                   },
                 }),
-                signal: AbortSignal.timeout(12000),
+                signal: AbortSignal.timeout(6000),
               }
             );
 

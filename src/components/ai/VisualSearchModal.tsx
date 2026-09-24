@@ -147,17 +147,75 @@ export const VisualSearchModal: React.FC<VisualSearchModalProps> = ({ isOpen, on
     startCamera(nextMode);
   };
 
+// Client-side instant Canvas compression (drastically accelerates network transfer and AI processing to ~1s)
+const compressImageForVision = (source: File | string, maxDimension = 512, quality = 0.75): Promise<string> => {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined') {
+      resolve(typeof source === 'string' ? source : '');
+      return;
+    }
+    const img = new window.Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxDimension || height > maxDimension) {
+        if (width > height) {
+          height = Math.round((height * maxDimension) / width);
+          width = maxDimension;
+        } else {
+          width = Math.round((width * maxDimension) / height);
+          height = maxDimension;
+        }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, width);
+      canvas.height = Math.max(1, height);
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      } else {
+        resolve(typeof source === 'string' ? source : '');
+      }
+    };
+    img.onerror = () => {
+      resolve(typeof source === 'string' ? source : '');
+    };
+    if (typeof source === 'string') {
+      img.src = source;
+    } else {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        img.src = (e.target?.result as string) || '';
+      };
+      reader.readAsDataURL(source);
+    }
+  });
+};
+
   const handleCapturePhoto = () => {
     if (!videoRef.current) return;
     const video = videoRef.current;
+    const maxDim = 512;
+    let w = video.videoWidth || 640;
+    let h = video.videoHeight || 480;
+    if (w > maxDim || h > maxDim) {
+      if (w > h) {
+        h = Math.round((h * maxDim) / w);
+        w = maxDim;
+      } else {
+        w = Math.round((w * maxDim) / h);
+        h = maxDim;
+      }
+    }
     const canvas = canvasRef.current || document.createElement('canvas');
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    canvas.width = Math.max(1, w);
+    canvas.height = Math.max(1, h);
 
     const ctx = canvas.getContext('2d');
     if (ctx) {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const base64 = canvas.toDataURL('image/jpeg', 0.88);
+      ctx.drawImage(video, 0, 0, w, h);
+      const base64 = canvas.toDataURL('image/jpeg', 0.75);
       stopCamera();
       setSelectedImage(base64);
       runVisualSearch(base64);
@@ -168,13 +226,19 @@ export const VisualSearchModal: React.FC<VisualSearchModalProps> = ({ isOpen, on
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const base64 = event.target?.result as string;
-      setSelectedImage(base64);
-      runVisualSearch(base64);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const compressed = await compressImageForVision(file, 512, 0.75);
+      setSelectedImage(compressed);
+      runVisualSearch(compressed);
+    } catch {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        const base64 = event.target?.result as string;
+        setSelectedImage(base64);
+        runVisualSearch(base64);
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const handleSampleImage = (url: string) => {

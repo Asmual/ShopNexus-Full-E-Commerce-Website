@@ -52,3 +52,9 @@ MASTER_SECURITY_CREDENTIALS.md
 
 
 config.bat
+
+.vscode/
+api.js
+director.js
+.env
+.env.local

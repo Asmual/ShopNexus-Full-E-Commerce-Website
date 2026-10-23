@@ -61,3 +61,6 @@ director.js
 .env.test.local
 .env.production.local
 *.env
+
+*.orc
+*.eot

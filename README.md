@@ -293,7 +293,7 @@ ShopNexus-Frontend/
     </td>
     <td align="center" width="25%">
       <a href="https://github.com/Asmual">
-        <img src="https://github.com/Asmual.png?size=100" width="80px;" alt="Asmual Hossain" style="border-radius:50%;"/><br />
+        <img src="https://github.com/Asmual.png?size=100" width="80px;" alt="Asmual Obaidul Hoque" style="border-radius:50%;"/><br />
         <sub><b>Asmual Hossain</b></sub>
       </a><br />
       <a href="https://github.com/Asmual">@Asmual</a>

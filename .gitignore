@@ -81,3 +81,9 @@ public/fonts/
 .venv/
 venv/
 
+
+.env
+.env.*
+.env.local
+.env.production
+.vscode/

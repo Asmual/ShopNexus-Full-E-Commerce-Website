@@ -81,3 +81,9 @@ public/fonts/
 .venv/
 venv/
 
+
+
+
+# VS Code
+*.orc
+
